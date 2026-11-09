@@ -1,5 +1,7 @@
 using DataToolkitCore
 using Test
+import TOML
+using UUIDs: uuid4
 
 import DataToolkitCore: natkeygen, stringdist, stringsimilarity,
     longest_common_subsequence, highlight_lcs, referenced_datasets,
@@ -155,6 +157,41 @@ end
         @test 2 == @advise AdviceAmalgamation([sump1]) sum(1)
     end
     deleteat!(PLUGINS, length(PLUGINS)) # remove `plg`
+
+    @testset "Collection plugin declarations" begin
+        # Create a fresh plugin so advice lookup succeeds during collection
+        # construction; `plg` from the "Plugin loading" testset is out of scope.
+        plg = Plugin(string(gensym()), [])
+        push!(PLUGINS, plg)
+        # Plugins declared at the top level (data config ≥ 0.10 style) must
+        # still be picked up by the `DataCollection` entrypoint, so plugin
+        # advice fires.
+        spec_top = Dict{String, Any}(
+            "uuid" => string(uuid4()), "name" => "TopLevelPlugins",
+            "plugins" => [plg.name],
+            "TestTable" => Dict{String, Any}("storage" => Dict{String, Any}("type" => "Void")))
+        io_top = IOBuffer()
+        TOML.print(io_top, spec_top)
+        seekstart(io_top)
+        cltn_top = read(io_top, DataCollection)
+        @test cltn_top.plugins == [plg.name]
+        @test [d.name for d in cltn_top.datasets] == ["TestTable"]
+        # The legacy style (plugins inside `config`) is no longer read by
+        # this version of DataToolkit; `config.plugins` ends up as a plain
+        # collection parameter.
+        spec_legacy = Dict{String, Any}(
+            "uuid" => string(uuid4()), "name" => "LegacyPlugins",
+            "config" => Dict{String, Any}("plugins" => [plg.name]),
+            "TestTable" => Dict{String, Any}("storage" => Dict{String, Any}("type" => "Void")))
+        io_legacy = IOBuffer()
+        TOML.print(io_legacy, spec_legacy)
+        seekstart(io_legacy)
+        cltn_legacy = read(io_legacy, DataCollection)
+        @test cltn_legacy.plugins == String[]
+        @test [d.name for d in cltn_legacy.datasets] == ["TestTable"]
+        @test get(cltn_legacy, "plugins") == [plg.name]
+        deleteat!(PLUGINS, length(PLUGINS)) # remove the temporary plugin
+    end
 end
 
 @testset "Type path ordering" begin

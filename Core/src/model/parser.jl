@@ -183,7 +183,12 @@ end
 # ---------------
 
 function DataCollection(spec::Dict{String, Any}; path::Union{String, Nothing}=nothing, mod::Module=Base.Main)
-    plugins::Vector{String} = get(get(spec, "config", Dict("config" => Dict())), "plugins", String[])
+    # Plugins may be declared at the top level (data config ≥ 0.10) or inside
+    # `config` (legacy data config < 0.10). Check both so plugin advice fires
+    # regardless of the declaration format.
+    plugins::Vector{String} = union(
+        get(spec, "plugins", String[]),
+        get(get(spec, "config", Dict("config" => Dict())), "plugins", String[]))
     AdviceAmalgamation(plugins)(fromspec, DataCollection, spec; path, mod)
 end
 
