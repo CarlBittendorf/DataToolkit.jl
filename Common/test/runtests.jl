@@ -263,6 +263,69 @@ end
         loader, io = nopath.loaders[1], open(nopath, IO)
         @test isnothing(DataToolkitCommon.load(loader, io, FilePathsBase.AbstractPath))
     end
+    @testset "julia loader AbstractPath ambiguity" begin
+        # The generic julia-loader `load(::DataLoader{:julia}, ::Any, ::Type{R})`
+        # and this extension's `load(::DataLoader, ::Any, ::Type{AbstractPath})`
+        # are ambiguous; an explicit disambiguator must route to the julia
+        # loader. Unqualified `read` (as `d"..."` performs) exercises the
+        # default type machinery that hits this path.
+        coll = freshcollection("defaults", """
+        [[identity]]
+        uuid = "$(uuid4())"
+
+            [[identity.storage]]
+            driver = "passthrough"
+            source = "source"
+            type = ["Vector"]
+
+            [[identity.loader]]
+            driver = "julia"
+            type = ["Vector"]
+            function = "xs -> xs"
+            input = "Vector"
+
+        [[source]]
+        uuid = "$(uuid4())"
+
+            [[source.loader]]
+            driver = "julia"
+            type = ["Vector"]
+            function = "() -> [1, 2, 3]"
+        """)
+        @test read(dataset(coll, "identity")) == [1, 2, 3]
+
+        # The real failure shape: a passthrough value that cannot be an
+        # AbstractPath (a DataFrame), with a julia loader that declares no
+        # `type`, so unqualified `read` tries AbstractPath first. The loader
+        # must report "no result" for the AbstractPath candidate instead of
+        # throwing a TypeError, letting `read` fall through to `Any`.
+        coll = freshcollection("defaults", """
+        [[identity]]
+        uuid = "$(uuid4())"
+
+            [[identity.storage]]
+            driver = "passthrough"
+            source = "source"
+            type = ["DataFrames.DataFrame"]
+
+            [[identity.loader]]
+            driver = "julia"
+            function = "df -> df"
+            input = "DataFrames.DataFrame"
+
+        [[source]]
+        uuid = "$(uuid4())"
+
+            [[source.loader]]
+            driver = "julia"
+            type = ["DataFrames.DataFrame"]
+            function = "() -> DataFrames.DataFrame(a = [1, 2], b = ['x', 'y'])"
+        """)
+        df = read(dataset(coll, "identity"))
+        @test df isa DataFrame
+        @test nrow(df) == 2 && ncol(df) == 2
+        @test read(dataset(coll, "identity"), DataFrame) == df
+    end
     @testset "toml" begin
         d = Dict{String, Any}(
             "title" => "example",
