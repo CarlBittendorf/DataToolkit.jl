@@ -1,10 +1,12 @@
 using Test
 using Dates, UUIDs
 
+using Base.Filesystem: truncate
+
 using DataToolkitStore: DataToolkitStore, MonitoredFile, InventoryConfig,
     CollectionInfo, SourceInfo, Checksum, StoreSource, CacheSource, Inventory,
     LockFile, iscontested, checksum, MerkleTree, read_merkles, write_merkle,
-    load_inventory, update_inventory!, modify_inventory!, save!,
+    load_inventory, parseinventory, update_inventory!, modify_inventory!, save!,
     exclusively, flushpendingwrites, expunge!, update_source!,
     refresh_sources!, garbage_collect!
 
@@ -93,6 +95,39 @@ end
     @test timedwait(() -> istaskdone(locker), 5.0) === :ok
     @test pidqueue(lf) == Int32[lf.pid]
     unlock(lf)
+end
+
+@testset "Inventory parsing yields typed vectors" begin
+    # Comprehensions converting to structs with `Vector{Base.PkgId}` fields
+    # can infer `Vector{Union{}}` from an empty input on some Julia versions,
+    # which the `Inventory` inner constructor rejects. Parsing must always
+    # produce properly-typed vectors, including when there is no cache.
+    content = """
+    inventory_version = $(DataToolkitStore.INVENTORY_VERSION)
+
+    [config]
+    auto_gc = 0
+    max_age = 7
+    max_size = 100000
+    recency_beta = 0.5
+    store_dir = "store"
+    cache_dir = "cache"
+
+    [collections.$(uuid4())]
+    name = "test"
+    seen = 2020-01-01T00:00:00
+
+    [[store]]
+    recipe = "1"
+    accessed = 2020-01-01T00:00:00
+    references = []
+    extension = "toml"
+    """
+    inv = parseinventory(mktemp() |> first, content)
+    @test inv.config isa InventoryConfig
+    @test eltype(inv.collections) == CollectionInfo
+    @test eltype(inv.stores) == StoreSource
+    @test eltype(inv.caches) == CacheSource
 end
 
 @testset "Inventory writer" begin

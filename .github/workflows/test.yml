@@ -1,0 +1,57 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    name: Julia ${{ matrix.version }} - ${{ matrix.pkg }} - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.version == 'nightly' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - '1.9'
+          - '1.10'
+          - '1.11'
+          - '1.12'
+          - '1.13'
+          - 'nightly'
+        pkg: &packages
+          - Base
+          - Common
+          - Core
+          - Main
+          - REPL
+          - Store
+        os:
+          - ubuntu-latest
+        include:
+          - os: macos-latest
+            version: '1.13'
+            pkg: *packages
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.version }}
+      - uses: julia-actions/cache@v2
+      # The component packages reference each other as unregistered path
+      # dependencies, so they must be developed into the test environment.
+      - name: Develop sibling packages
+        run: |
+          julia --startup-file=no -e '
+            using Pkg
+            pkgs = filter(p -> p != "${{ matrix.pkg }}",
+                          ["Base", "Common", "Core", "Main", "REPL", "Store"])
+            Pkg.develop(path = [joinpath(pwd(), p) for p in pkgs])'
+      - uses: julia-actions/julia-buildpkg@v1
+        with:
+          project: ${{ matrix.pkg }}
+      - uses: julia-actions/julia-runtest@v1
+        with:
+          project: ${{ matrix.pkg }}

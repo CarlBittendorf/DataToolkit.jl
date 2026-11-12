@@ -7,15 +7,15 @@ convenience, others need to be specifically imported or accessed with =DataToolk
 ** Macros
 
 #+begin_src @docs
-@d_str
-@data_cmd
-@require
+DataToolkit.@d_str
+DataToolkit.@data_cmd
+DataToolkit.@require
 #+end_src
 
 ** Functions
 
 #+begin_src @docs
-dataset
+DataToolkit.dataset
 loadcollection!
 #+end_src
 

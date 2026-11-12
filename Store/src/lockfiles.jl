@@ -289,7 +289,7 @@ function pidqueue(lf::LockFile)
         nbytes = filesize(lf.file)
         if nbytes % sizeof(Int32) != 0
             # The file is corrupt, so we truncate it.
-            truncate(lf.file, 0)
+            Base.Filesystem.truncate(lf.file, 0)
             !keeplocked && funlock(lf)
             return Int32[]
         else # It got better?
@@ -353,7 +353,7 @@ function claim_pidfront!(lf::LockFile)
         # queue must still be rewritten, else two processes prune the same corpse.
         if livepids != rawpids
             overwrite(lf, livepids)
-            truncate(lf.file, sizeof(Int32) * length(livepids))
+            Base.Filesystem.truncate(lf.file, sizeof(Int32) * length(livepids))
         end
         lf.held = true
     finally

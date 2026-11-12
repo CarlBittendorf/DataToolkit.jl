@@ -130,6 +130,14 @@ const MERKLE_INACCESSIBLE = Checksum(:inaccessible, UInt8[])
 inaccessible_node(name::String, mtime::Float64 = 0.0) =
     MerkleTree(name, mtime, MERKLE_INACCESSIBLE, nothing)
 
+# `isreadable(::AbstractString)` was only added to Base in Julia 1.11.
+@static if VERSION >= v"1.11"
+    const ispathreadable = isreadable
+else
+    ispathreadable(path::AbstractString) =
+        uperm(path) & 0o4 != 0 || Base.Libc.getuid() == 0
+end
+
 # A directory awaiting its children; folded once `remaining` reaches zero.
 mutable struct DirFrame
     const name::String
@@ -271,7 +279,7 @@ function process_dir!(pool::MerklePool, wid::Int, task::MerkleTask, buf::Vector{
                 report!(pool, frame, i, ochild, false)  # unchanged file — no re-hash
             elseif islink(estat)
                 report!(pool, frame, i, seq_merkle(checksum_fn, fullpath, entry, String[]), true)
-            elseif isfile(estat) && isreadable(childpath)
+            elseif isfile(estat) && ispathreadable(childpath)
                 report!(pool, frame, i,
                         MerkleTree(entry, mtime(estat), hash_file(checksum_fn, childpath, buf), nothing), true)
             else
@@ -285,7 +293,7 @@ end
 function seq_merkle(checksum_fn::F, root::String, path::String, descent::Vector{String}) where {F}
     fullpath = joinpath(root, path)
     pathstat = stat(fullpath)
-    if !isreadable(fullpath)
+    if !ispathreadable(fullpath)
         nothing
     elseif islink(lstat(fullpath))
         target = abspath(dirname(fullpath), readlink(fullpath))
@@ -361,7 +369,7 @@ function _merkle(root::String, path::String, checksum_fn::F,
     path = String(rstrip(path, ('/', '\\')))
     fullpath = joinpath(root, path)
     st = stat(fullpath)
-    isreadable(fullpath) || return nothing
+    ispathreadable(fullpath) || return nothing
     if !isdir(st) || islink(lstat(fullpath))
         return seq_merkle(checksum_fn, root, path, String[])  # single file / symlink root
     end
@@ -548,8 +556,18 @@ end
 
 function try_read_merkle_line(io::IO, buf::IO)
     eof(io) && return
-    copyuntil(seekstart(buf), io, UInt8('\n'), keep=true) |>
-        seekstart |> try_read_merkle_line
+    # Base.copyuntil only exists on Julia 1.11+
+    @static if isdefined(Base, :copyuntil)
+        Base.copyuntil(buf, io, UInt8('\n'), keep=true) |>
+            seekstart |> try_read_merkle_line
+    else
+        while !eof(io)
+            b = read(io, UInt8)
+            write(buf, b)
+            b == UInt8('\n') && break
+        end
+        seekstart(buf) |> try_read_merkle_line
+    end
 end
 
 """
