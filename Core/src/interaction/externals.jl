@@ -197,7 +197,7 @@ function read1(dataset::DataSet, @nospecialize(as::Type))
                 for (_, Tstorage_out) in s_steps
                     datahandle = open(dataset, Tstorage_out; write = false)
                     if !isnothing(datahandle)
-                        result = @advise dataset load(loader, datahandle, Tloader_out)::Union{Some{as}, as, Nothing}
+                        result = @advise dataset load(loader, datahandle, Tloader_out)::Any
                         if !isnothing(result)
                             return something(result)
                         elseif datahandle isa IOStream && isopen(datahandle)
@@ -212,7 +212,7 @@ function read1(dataset::DataSet, @nospecialize(as::Type))
         # without an explicit storage backend.
         for (Tloader_in, Tloader_out) in l_steps
             if Tloader_in == Nothing
-                result = @advise dataset load(loader, nothing, as)::Union{Some{as}, as, Nothing}
+                result = @advise dataset load(loader, nothing, as)::Any
                 !isnothing(result) && return something(result)
             end
         end
