@@ -145,7 +145,7 @@ their declared types, and the implemented methods. If a method exists that can l
 `dataset` to a subtype of `as`, it will be used. Methods that produce a type
 declared in `dataset`'s `loaders` are preferred.
 """
-function Base.read(dataset::DataSet, @nospecialize(as::Type))::as
+function Base.read(dataset::DataSet, @nospecialize(as::Type))
     @log_do("read",
             "Reading $(dataset.name) as $as",
             @advise read1(dataset, as))
