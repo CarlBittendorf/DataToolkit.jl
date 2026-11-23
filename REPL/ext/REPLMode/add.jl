@@ -94,6 +94,16 @@ function add(input::AbstractString)
     spec = prompt_attributes()
     dataset = create!(collection, DataSet, name, spec)
     addtransformers!(dataset, from; via...)
+    if isempty(dataset.storage)
+        # A data set without storage can't hold any data, so undo the
+        # partial creation and leave the collection unchanged.
+        deleteat!(collection.datasets,
+                  findfirst(==(dataset), collection.datasets))
+        printstyled(" ! ", color=:red, bold=true)
+        println("Failed to create a '$(first(via.storage))' DataStorage, " *
+                "not adding '$name'")
+        return nothing
+    end
     iswritable(collection) && save!(collection)
 end
 

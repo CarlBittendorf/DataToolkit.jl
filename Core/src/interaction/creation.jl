@@ -387,13 +387,18 @@ to define the interactive prompt with fields like:
 The function can also accept a `Function` that takes the current specification
 as an argument and returns a TOML-representable value or `NamedTuple`.
 
-Use this function when user interaction is necessary for the creation process.
+Most transformers only take the transformer type and `source`, without the
+`dataset`; both the 2-argument `createinteractive(T, source)` and 3-argument
+`createinteractive(T, source, dataset)` forms are supported, following the
+same conventions as [`createauto`](@ref).
 For cases where the creation can be handled programmatically without user input,
 consider using `createauto`.
 """
 function createinteractive end
 
-createinteractive(::DataSet, T::Type{<:DataTransformer}, arg::String) =
+createinteractive(parent::DataSet, T::Type{<:DataTransformer}, arg::String) =
+    createinteractive(T, arg, parent)
+createinteractive(::Type{T}, arg, ::Any) where {T <: DataTransformer} =
     createinteractive(T, arg)
 createinteractive(::Type{<:DataTransformer}, ::String) = nothing
 
@@ -437,13 +442,22 @@ spec form" as a list of `key::String => value` pairs. For example:
  "baz" => 2]
 ```
 
+Most transformers only take the transformer type and `source`, without the
+`dataset`; both the 2-argument `createauto(T, source)` and 3-argument
+`createauto(T, source, dataset)` forms are supported. Specialised methods that
+make use of the `dataset` should implement the 3-argument form with the
+arguments ordered `(T, source, dataset)`; the 2-argument form is attempted
+first, and only if it is not applicable is `dataset` supplied.
+
 Use this function when the creation process should be handled programmatically
 without user input. If user interaction is required to gather additional
 information use `createinteractive`.
 """
 function createauto end
 
-createauto(::DataSet, T::Type{<:DataTransformer}, arg::String) =
+createauto(parent::DataSet, T::Type{<:DataTransformer}, arg::String) =
+    createauto(T, arg, parent)
+createauto(::Type{T}, arg, ::Any) where {T <: DataTransformer} =
     createauto(T, arg)
 createauto(::Type{<:DataTransformer}, ::Any) = nothing
 

@@ -189,3 +189,31 @@ end
     @test M.find_repl_cmd("li").name == "list"
     @test isnothing(M.find_repl_cmd("s"))
 end
+
+@testset "add rolls back when no storage can be created (R11)" begin
+    # A data set cannot be constructed without storage, so `add`ing one from a
+    # source that no storage driver can make sense of must not leave a
+    # partially-created data set in the collection.
+    datatoml = """
+    data_config_version = 0
+    uuid = "2d70ad35-a766-4a14-c802-a4f04bfd6ef1"
+    name = "addtest"
+    """
+    path = tempname() * ".toml"
+    write(path, datatoml)
+    chmod(path, 0o644)
+    collection = loadcollection!(path)
+    try
+        redirect_stdio(stdin = devnull, stdout = devnull, stderr = devnull) do
+            DataToolkitREPL.toplevel_execute_repl_cmd("add nope from /nonexistent-path-xyz")
+        end
+        @test !any(d -> d.name == "nope", collection.datasets)
+        @test isempty(collection.datasets)
+        # And the collection itself is untouched on disk.
+        @test length(loadcollection!(IOBuffer(read(path, String))).datasets) == 0
+    finally
+        filter!(!=(collection), STACK)
+        chmod(path, 0o644)
+        rm(path, force=true)
+    end
+end

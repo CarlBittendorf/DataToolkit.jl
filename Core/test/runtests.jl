@@ -784,3 +784,22 @@ end
     # from `Dict{String,Any}(nothing)`.
     @test isnothing(trycreateauto(parent, DataStorage{:specreate}, ""; interactive=true))
 end
+
+@testset "Dataset-aware automatic creation" begin
+    @eval begin
+        import DataToolkitCore: createauto
+        # Only implementable when the dataset is supplied: the 2-argument form
+        # is left unimplemented, so the generic `createauto(T, arg)` fallback
+        # must return `nothing` and never produce a transformer.
+        createauto(::Type{DataStorage{:needsdataset}}, ::String, ::DataSet) =
+            Dict{String, Any}("flag" => true)
+        getstorage(::DataStorage{:needsdataset}, ::Type{String}) = "ok"
+    end
+    parent = DataToolkitCore.DataSet(DataCollection(), "ds", Dict{String, Any}("uuid" => string(Base.UUID(rand(UInt128)))))
+    # The dataset reaches `createauto(T, source, dataset)`.
+    s = trycreateauto(parent, DataStorage{:needsdataset}, "anything"; interactive=false)
+    @test s isa DataStorage{:needsdataset}
+    @test getstorage(s, String) == "ok"
+    # The 2-argument fallback remains reachable for plain drivers.
+    @test isnothing(trycreateauto(parent, DataStorage{:emptycreate}, ""; interactive=false))
+end
