@@ -159,7 +159,16 @@ function transformers_printall end
             # only added /after/ this package is loaded and this `__init__`
             # finishes, so we need to require REPL and trigger extension loading
             # /after/ this package is loaded.
-            @async (sleep(0.01); Base.require_stdlib(replid))
+            # Load synchronously in non-interactive sessions: the deferred
+            # `@async` load races with other lazy package loads (e.g. a plugin
+            # using `@import Pkg`) and concurrent package-image restoration
+            # segfaults on Julia 1.13. Interactive sessions keep the deferred
+            # load so the REPL starts before the extension compiles.
+            if !isinteractive() && !Base.generating_output()
+                Base.require_stdlib(replid)
+            else
+                @async (sleep(0.01); Base.require_stdlib(replid))
+            end
         end
     end
 end
