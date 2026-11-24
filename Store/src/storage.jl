@@ -134,7 +134,11 @@ function store_entry_remove(path::AbstractString)
             rm(path; recursive=true)
         catch err
             err isa Base.IOError || rethrow(err)
-            # Read-only tree: restore write bits within the store entry, then retry.
+            # Read-only tree: make the entry itself traversable and writable
+            # before walking it — while the root directory lacks execute
+            # permission, `chmod` of any child also fails with EACCES, since
+            # path resolution of the child requires a searchable parent.
+            chmod(path, 0o755)
             for (root, dirs, files) in walkdir(path)
                 for name in dirs
                     chmod(joinpath(root, name), 0o755)
@@ -143,7 +147,6 @@ function store_entry_remove(path::AbstractString)
                     chmod(joinpath(root, name), 0o644)
                 end
             end
-            chmod(path, 0o755)
             rm(path; recursive=true)
         end
     else

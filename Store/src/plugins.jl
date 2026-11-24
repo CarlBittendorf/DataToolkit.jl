@@ -43,6 +43,18 @@ function store_get_a(f::typeof(storage), storer::DataStorage, as::Type; write::B
             store_entry_remove(file)
         end
     end
+    # A directory cache entry without execute permission is unusable: neither
+    # the entry nor any of its contents can be reached. Treat it as absent so
+    # the source is stored afresh, which also removes the broken entry. If
+    # permissions cannot be determined (EACCES), the entry is also unusable.
+    if !isnothing(file) && isdir(file)
+        mode = try uperm(file) catch; 0 end
+        if mode & 0o111 == 0
+            @log_do "store:open" "Discarding non-traversable cached directory for $(sprint(show, storer.dataset.name))"
+            store_entry_remove(file)
+            file = nothing
+        end
+    end
     if !(shouldstore(storer) || @getparam(storer."save"::Bool, false)) || write
         # If the store is invalid (should not be stored, or about to be
         # written to), then it should be removed before proceeding as

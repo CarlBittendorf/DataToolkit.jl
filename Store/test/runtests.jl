@@ -342,6 +342,49 @@ DataToolkitCore.supportedtypes(::Type{DataLoader{:testdirread}}) =
     @test isdir(cachepath) && length(readdir(cachepath)) == 2
 end
 
+@testset "Store directory cache entries: legacy non-traversable entry" begin
+    dirname_testdir_source[] = mktempdir()
+    write(joinpath(dirname_testdir_source[], "unisens.xml"), "<unisens/>")
+    write(joinpath(dirname_testdir_source[], "a.csv"), "x\n1\n")
+    storedir = mktempdir()
+    data_toml = joinpath(mktempdir(), "Data.toml")
+    write(data_toml, """
+    data_config_version = 0
+    uuid = "$(uuid4())"
+    name = "testdircollectionlegacy"
+    plugins = ["store"]
+
+    [config.store]
+    path = "$storedir"
+
+    [[dirdslegacy]]
+    uuid = "$(uuid4())"
+
+        [[dirdslegacy.storage]]
+        driver = "testdir"
+
+        [[dirdslegacy.loader]]
+        driver = "testdirread"
+    """)
+    loadcollection!(data_toml)
+    dirds = dataset("dirdslegacy")
+    storage = only(dirds.storage)
+    inventory = DataToolkitStore.getinventory(dirds.collection)
+
+    # Seed the store, then degrade the entry to a non-traversable tree, as
+    # entries written by pre-0.10 store versions could be.
+    @test read(dirds, Vector{String}) == ["a.csv=444", "unisens.xml=444"]
+    cachepath = DataToolkitStore.storefile(inventory, storage)
+    @test !isnothing(cachepath) && isdir(cachepath)
+    chmod(cachepath, 0o444) # read, but no execute: unreachable contents
+    # The next read must discard the unusable entry, re-store, and succeed —
+    # without the caller needing to repair or delete the user's cache.
+    @test read(dirds, Vector{String}) == ["a.csv=444", "unisens.xml=444"]
+    mode = stat(cachepath).mode
+    @test !iszero(mode & 0o111) # replacement entry is traversable again
+    @test sort(readdir(cachepath)) == ["a.csv", "unisens.xml"]
+end
+
 @testset "Lifetime interpretation" begin
     interpret = DataToolkitStore.interpret_lifetime
     day = 24 * 60 * 60
