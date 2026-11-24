@@ -105,6 +105,89 @@ end
 storefile(::Inventory, ::Nothing) = nothing
 
 """
+    store_entry_exists(path::AbstractString) -> Bool
+
+Whether a store cache entry exists at `path`, without probing its contents.
+
+A directory cache entry is a regular directory; `isfile` is `false` for it, and
+when its parent lacks directory access rights `isfile` may raise `IOError`
+(EACCES) instead of returning `false`. Both cases must be treated as "the
+entry exists" so that directory cache entries are served from the store and
+their inventory records are not spuriously deleted. The contents of the entry
+are never probed.
+"""
+function store_entry_exists(path::AbstractString)
+    try
+        isfile(path) || isdir(path)
+    catch err
+        err isa Base.IOError && err.code == -13 && return true
+        rethrow(err)
+    end
+end
+
+# Remove a store cache entry, including a read-only directory tree. Only the
+# entry itself (inside the store cache directory, which the store owns) is
+# made writable again before removal; nothing outside the store is touched.
+function store_entry_remove(path::AbstractString)
+    if isdir(path)
+        try
+            rm(path; recursive=true)
+        catch err
+            err isa Base.IOError || rethrow(err)
+            # Read-only tree: restore write bits within the store entry, then retry.
+            for (root, dirs, files) in walkdir(path)
+                for name in dirs
+                    chmod(joinpath(root, name), 0o755)
+                end
+                for name in files
+                    chmod(joinpath(root, name), 0o644)
+                end
+            end
+            chmod(path, 0o755)
+            rm(path; recursive=true)
+        end
+    else
+        rm(path; force=true)
+    end
+    nothing
+end
+
+# Apply the store's read-only mode to `path`, hardening all children of a
+# directory: files lose every write bit, directories keep the execute bits
+# they need to remain traversable. Only entries inside the freshly-created
+# cache tree are modified.
+function chmod_readonly(path::AbstractString, writable_mode::Integer)
+    if isdir(path)
+        for (root, dirs, files) in walkdir(path)
+            for name in files
+                chmod(joinpath(root, name), 0o100444 & writable_mode)
+            end
+            for name in dirs
+                # Directories must stay traversable: mask the write bits with
+                # the inventory's mode, but never strip the execute bits.
+                chmod(joinpath(root, name), (0o100555 & writable_mode) | 0o111)
+            end
+        end
+        chmod(path, (0o100555 & writable_mode) | 0o111)
+    else
+        chmod(path, 0o100444 & writable_mode)
+    end
+    nothing
+end
+
+# The size of a store cache entry: `filesize` for files, zero for directory
+# entries (which are accounted by traversal cost, not bytes). A non-traversable
+# parent that makes `isfile` raise EACCES is treated as "entry exists".
+function store_entry_size(path::AbstractString)
+    try
+        isfile(path) && !isdir(path) && filesize(path)
+    catch err
+        err isa Base.IOError && err.code == -13 && return 0
+        rethrow(err)
+    end
+end
+
+"""
     storefile(inventory::Inventory, storage::DataStorage)
     storefile(inventory, loader::DataLoader, as::Type)
 
@@ -117,7 +200,7 @@ function storefile(inventory::Inventory, @nospecialize(storage::DataStorage))
     source = getsource(inventory, storage)
     if !isnothing(source)
         file = storefile(inventory, source)
-        if isfile(file)
+        if store_entry_exists(file)
             file
         else
             # If the cache file has been removed, remove the associated
@@ -135,7 +218,7 @@ function storefile(inventory::Inventory, @nospecialize(loader::DataLoader), as::
     source = getsource(inventory, loader, as)
     if !isnothing(source)
         file = storefile(inventory, source)
-        if isfile(file)
+        if store_entry_exists(file)
             file
         else
             # If the cache file has been removed, remove the associated
@@ -354,15 +437,60 @@ function storesave(inventory::Inventory, @nospecialize(storage::DataStorage), ::
     dest = storefile(inventory, newsource)
     @log_do "store:save" "Transferring $(sprint(show, storage.dataset.name)) to storage"
     isdir(dirname(dest)) || mkpath(dirname(dest))
-    if startswith(path.path, tempdir()) || (startswith(path.path, dest) && endswith(path.path, ".tmp"))
+    # A previous cache entry at `dest` (notably a read-only directory tree)
+    # must be removed before the new copy; `cp`/`mv` with `force` cannot
+    # replace a read-only directory.
+    store_entry_exists(dest) && store_entry_remove(dest)
+    if isdir(path.path)
+        # A directory source is always copied, never moved: it may live
+        # anywhere (including under `tempdir()`, and may be declared as a
+        # `FilePath`), and consuming the original would break subsequent
+        # reads and re-stores of the same source.
+        cp(path.path, dest, force=true)
+    elseif startswith(path.path, tempdir()) || (startswith(path.path, dest) && endswith(path.path, ".tmp"))
         mv(path.path, dest, force=true)
     else
         cp(path.path, dest, force=true)
     end
-    chmod(dest, 0o100444 & filemode(inventory.file.path)) # Make read-only
+    # Make read-only, preserving directory access rights: a cached directory
+    # without an execute bit cannot be traversed or stat-probed, so any read
+    # of its contents fails with a permission error. Files are stripped to
+    # read-only, and directories additionally keep their execute bits.
+    chmod_readonly(dest, filemode(inventory.file.path))
     update_source!(inventory, newsource, storage.dataset.collection)
     stochastic_gc!(inventory, dest)
     FilePath(dest)
+end
+
+"""
+    storesave(inventory::Inventory, storage::DataStorage, ::Type{DirPath}, path::DirPath)
+
+Save the directory `path` representing `storage` into `inventory`.
+
+A directory source is always copied, never moved: unlike a dumped file created
+by the store, the source directory may live anywhere (including outside
+`tempdir()`), and consuming it would break subsequent reads or re-stores.
+"""
+function storesave(inventory::Inventory, @nospecialize(storage::DataStorage),
+                   ::Type{DirPath}, path::DirPath)
+    inventory.file.writable || return path
+    checksum = getchecksum(inventory, storage, path)
+    newsource = StoreSource(
+        rhash(storage),
+        [storage.dataset.collection.uuid],
+        now(), checksum, "/")
+    dest = storefile(inventory, newsource)
+    @log_do "store:save" "Transferring $(sprint(show, storage.dataset.name)) to storage"
+    isdir(dirname(dest)) || mkpath(dirname(dest))
+    # A previous cache entry at `dest` (notably a read-only directory tree)
+    # must be removed before the new copy; `cp`/`mv` with `force` cannot
+    # replace a read-only directory.
+    store_entry_exists(dest) && store_entry_remove(dest)
+    cp(path.path, dest, force=true)
+    chmod_readonly(dest, filemode(inventory.file.path))
+    update_source!(inventory, newsource, storage.dataset.collection)
+    stochastic_gc!(inventory, dest)
+    DirPath(dest)
 end
 
 """

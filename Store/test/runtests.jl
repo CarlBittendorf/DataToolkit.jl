@@ -14,6 +14,7 @@ isdirty(inv::Inventory) = inv.batch.edits > inv.batch.written
 
 using DataToolkitStore.DataToolkitCore: DataToolkitCore, DataCollection,
     DataStorage, DataLoader, dataset, loadcollection!
+using DataToolkitStore.DataToolkitCore: FilePath, DirPath, QualifiedType, supportedtypes
 
 using DataToolkitStore.LockFiles: pidlive, pidqueue, overwrite
 
@@ -261,6 +262,84 @@ DataToolkitCore.getstorage(::DataStorage{:testblob}, ::Type{IO}) =
     @test open(dataset("blob"), IO; write = true) isa IO
     @test isempty(inventory.stores)
     @test !occursin("[[store]]", read(inventory.file.path, String))
+end
+
+# A storage driver whose `getstorage` yields a `FilePath` pointing at a
+# directory, exercising the generic copy-based `storesave`/`storefile` path
+# (unlike the symlink-based `:filesystem` driver).
+const dirname_testdir_source = Ref("")
+DataToolkitCore.getstorage(::DataStorage{:testdir}, ::Type{FilePath}) =
+    FilePath(dirname_testdir_source[])
+
+function DataToolkitCore.load(loader::DataLoader{:testdirread}, source::FilePath, ::Type{Vector{String}})
+    # Probing the cached directory must not raise a permission error:
+    # readdir plus per-child stat covers the two failure modes of a cache
+    # directory without directory access rights.
+    sort!(String[string(name, '=', string(try
+        stat(joinpath(source.path, name)).mode & 0o777
+    catch
+        0
+    end, base = 8)) for name in readdir(source.path)])
+end
+DataToolkitCore.supportedtypes(::Type{DataLoader{:testdirread}}) =
+    [QualifiedType(Vector{String}), QualifiedType(DirPath), QualifiedType(FilePath)]
+
+@testset "Store directory cache entries" begin
+    dirname_testdir_source[] = mktempdir()
+    @test isdir(dirname_testdir_source[])
+    write(joinpath(dirname_testdir_source[], "unisens.xml"), "<unisens/>")
+    write(joinpath(dirname_testdir_source[], "a.csv"), "x\n1\n")
+    storedir = mktempdir()
+    data_toml = joinpath(mktempdir(), "Data.toml")
+    write(data_toml, """
+    data_config_version = 0
+    uuid = "$(uuid4())"
+    name = "testdircollection"
+    plugins = ["store"]
+
+    [config.store]
+    path = "$storedir"
+
+    [[dirds]]
+    uuid = "$(uuid4())"
+
+        [[dirds.storage]]
+        driver = "testdir"
+
+        [[dirds.loader]]
+        driver = "testdirread"
+    """)
+    loadcollection!(data_toml)
+    dirds = dataset("dirds")
+    storage = only(dirds.storage)
+    inventory = DataToolkitStore.getinventory(dirds.collection)
+
+    # The first read stores the directory in the store; children are
+    # stat-able, read-only, and reported through the loader probes.
+    @test read(dirds, Vector{String}) == ["a.csv=444", "unisens.xml=444"]
+    @test length(inventory.stores) == 1
+
+    # The cache entry is a directory that is read-only but traversable:
+    # the execute bit survives the read-only hardening.
+    cachepath = DataToolkitStore.storefile(inventory, storage)
+    @test !isnothing(cachepath) && isdir(cachepath)
+    mode = stat(cachepath).mode
+    @test iszero(mode & 0o222) # no write bits anywhere in the entry
+    @test !iszero(mode & 0o555) # read and directory access preserved
+    @test sort(readdir(cachepath)) == ["a.csv", "unisens.xml"]
+    @test iszero(stat(joinpath(cachepath, "unisens.xml")).mode & 0o222)
+
+    # A later read is served from the store: the entry is found by the
+    # directory-aware existence check and the inventory record survives.
+    @test DataToolkitStore.storefile(inventory, storage) == cachepath
+    @test length(inventory.stores) == 1
+    @test read(dirds, Vector{String}) == ["a.csv=444", "unisens.xml=444"]
+
+    # Storing again after the original source changed replaces the stale
+    # read-only cache entry without failing.
+    write(joinpath(dirname_testdir_source[], "unisens.xml"), "<unisens v=\"2\"/>")
+    @test read(dirds, Vector{String}) == ["a.csv=444", "unisens.xml=444"]
+    @test isdir(cachepath) && length(readdir(cachepath)) == 2
 end
 
 @testset "Lifetime interpretation" begin

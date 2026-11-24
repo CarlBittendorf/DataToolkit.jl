@@ -38,9 +38,9 @@ function store_get_a(f::typeof(storage), storer::DataStorage, as::Type; write::B
     # Get any applicable cache file
     source = getsource(inventory, storer)
     file = storefile(inventory, source)
-    if !isnothing(file) && isfile(file) && haskey(storer.parameters, "lifetime")
+    if !isnothing(file) && store_entry_exists(file) && haskey(storer.parameters, "lifetime")
         if epoch(storer) > epoch(storer, ctime(file))
-            rm(file, force=true)
+            store_entry_remove(file)
         end
     end
     if !(shouldstore(storer) || @getparam(storer."save"::Bool, false)) || write
@@ -55,23 +55,38 @@ function store_get_a(f::typeof(storage), storer::DataStorage, as::Type; write::B
             end
         end
         (f, (storer, as), (; write))
-    elseif !isnothing(file) && isfile(file)
+    elseif !isnothing(file) && store_entry_exists(file)
         # If using a cache file, ensure the parent collection is registered
         # as a reference.
         STORE_RECORD_ACCESS &&
             update_source!(inventory, source, storer.dataset.collection)
-        if as === IO || as === IOStream
-            @log_do "store:open" "Opening $as for $(sprint(show, storer.dataset.name)) from the store"
-            (identity, (open(file, "r"),))
-        elseif as === FilePath
-            @log_do "store:open" "Opening $as for $(sprint(show, storer.dataset.name)) from the store"
-            (identity, (FilePath(file),))
-        elseif as === Vector{UInt8}
-            @log_do "store:open" "Opening $as for $(sprint(show, storer.dataset.name)) from the store"
-            (identity, (read(file),))
-        elseif as === String
-            @log_do "store:open" "Opening $as for $(sprint(show, storer.dataset.name)) from the store"
-            (identity, (read(file, String),))
+        if isfile(file)
+            if as === IO || as === IOStream
+                @log_do "store:open" "Opening $as for $(sprint(show, storer.dataset.name)) from the store"
+                (identity, (open(file, "r"),))
+            elseif as === FilePath
+                @log_do "store:open" "Opening $as for $(sprint(show, storer.dataset.name)) from the store"
+                (identity, (FilePath(file),))
+            elseif as === Vector{UInt8}
+                @log_do "store:open" "Opening $as for $(sprint(show, storer.dataset.name)) from the store"
+                (identity, (read(file),))
+            elseif as === String
+                @log_do "store:open" "Opening $as for $(sprint(show, storer.dataset.name)) from the store"
+                (identity, (read(file, String),))
+            else
+                (f, (storer, as), (; write))
+            end
+        elseif isdir(file)
+            # A directory cache entry can only be handed over as a path;
+            # the file/IO shortcuts above do not apply to a directory.
+            # Serving the cached path directly keeps read-only sources
+            # usable after the original source has moved or disappeared.
+            if as <: SystemPath
+                @log_do "store:open" "Opening $as for $(sprint(show, storer.dataset.name)) from the store"
+                (identity, (as(file),))
+            else
+                (f, (storer, as), (; write))
+            end
         else
             (f, (storer, as), (; write))
         end

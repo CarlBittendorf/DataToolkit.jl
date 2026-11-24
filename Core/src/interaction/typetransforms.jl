@@ -203,8 +203,17 @@ function transformersigs(S::Type{<:DataStorage}, desired::Type; read::Bool=true,
             push!(types, (Tstor, desired))
         else
             for (Tout, cansubtype) in typevariants(Tout1)
-                Tout <: desired || desired <: Tout || continue
-                push!(types, (Tstor, ifelse(cansubtype, desired, Tout)))
+                if Tout <: SystemPath && (Tout <: desired || desired <: Tout)
+                    # Path-producing storages are also probed with the other
+                    # path type, so that a directory source can yield a
+                    # DirPath and a file source a FilePath regardless of
+                    # which path type the `getstorage` method declares.
+                    push!(types, (Tstor, DirPath))
+                    push!(types, (Tstor, FilePath))
+                else
+                    Tout <: desired || desired <: Tout || continue
+                    push!(types, (Tstor, ifelse(cansubtype, desired, Tout)))
+                end
             end
         end
     end
@@ -319,6 +328,10 @@ function typesteps(store::DataStorage, desired::Type; write::Bool)
                 push!(path_infos, ((Nothing => ttype), target_ind, Tstor))
             end
         else
+            # Preserve the preference order of the storage's own
+            # `supportedtypes`: a storage that produces paths should yield a
+            # FilePath for file sources and a DirPath for directory sources,
+            # rather than assuming whichever of the two was declared first.
             target_ind = something(findfirst(qt -> qt <: Tout, target_types),
                                    length(target_types) + 1)
             push!(path_infos, ((Nothing => Tout), target_ind, Tstor))

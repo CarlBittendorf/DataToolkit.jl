@@ -239,7 +239,7 @@ TODO elaborate
 function printstats(inv::Inventory)
     function storesize(store)
         file = storefile(inv, store)
-        Int(isfile(file) && filesize(file))
+        isnothing(file) ? 0 : store_entry_size(file)
     end
     printstyled(lpad("Tracking", MSG_LABEL_WIDTH), bold=true, color=:green)
     println(' ', length(inv.collections), " collection",
@@ -667,7 +667,7 @@ function expungeexclusive!(inventory::Inventory, collection::CollectionInfo; dry
                     if !dryrun
                         deleteat!(sources, i)
                         file = storefile(inventory, source)
-                        isfile(file) && rm(file, force=true)
+                        isnothing(file) || store_entry_remove(file)
                     else
                         i += 1
                     end
